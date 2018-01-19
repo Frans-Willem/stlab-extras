@@ -1,14 +1,14 @@
-#ifndef STLAB_EXTRAS_BOOSTCORO2_HPP
-#define STLAB_EXTRAS_BOOSTCORO2_HPP
-#include "polyfill/apply.h"
+#ifndef STLAB_EXTRAS_BOOST_CORO2_HPP
+#define STLAB_EXTRAS_BOOST_CORO2_HPP
 #include <boost/coroutine2/all.hpp>
 #include <boost/optional.hpp>
 #include <iostream>
+#include <stlab/concurrency/tuple_algorithm.hpp>
 #include <stlab/concurrency/future.hpp>
 #include <stlab/concurrency/immediate_executor.hpp>
 
-namespace stlabextras {
-namespace boostcoro2 {
+namespace stlab_extras {
+namespace boost_coro2 {
 typedef boost::coroutines2::coroutine<stlab::future<void>> coro_t;
 // Implementation for "await" functionality
 class Await {
@@ -16,7 +16,7 @@ private:
   coro_t::push_type &sink_;
 
 public:
-  inline Await(coro_t::push_type &sink) : sink_(sink) {};
+  inline Await(coro_t::push_type &sink) : sink_(sink){};
   template <typename T> T operator()(stlab::future<T> f) {
     // Explicitly putting this in a shared pointer,
     // if we put it on the stack, and the coroutine is destroyed without being
@@ -79,7 +79,7 @@ template <typename T> struct CoroHelpers {
   RunInCoro(std::function<void(std::exception_ptr, boost::optional<T>)> promise,
             F f, std::tuple<Args...> args) {
     try {
-      T retval = polyfill::apply(f, std::move(args));
+      T retval = stlab::v1::detail::apply_tuple(f, std::move(args));
       promise(nullptr, std::move(retval));
     } catch (...) {
       promise(std::current_exception(), boost::none);
@@ -100,7 +100,7 @@ template <> struct CoroHelpers<void> {
   static void RunInCoro(std::function<void(std::exception_ptr)> promise, F f,
                         std::tuple<Args...> args) {
     try {
-      polyfill::apply(f, std::move(args));
+		stlab::v1::detail::apply_tuple(f, std::move(args));
     } catch (...) {
       promise(std::current_exception());
       return;
@@ -111,11 +111,11 @@ template <> struct CoroHelpers<void> {
 
 // Actually runs a coroutine F on an executor E with arguments Args
 template <typename E, typename F, typename... Args>
-auto Run(E executor, F f, Args... args) {
+auto Run(E executor, F f, Args&&... args) {
   typedef typename std::result_of<F(Await, Args...)>::type T;
   auto package = CoroHelpers<T>::CreatePackage(executor);
   auto promise = std::move(package.first);
-  std::tuple<Args...> args_tuple(std::move(args)...);
+  std::tuple<Args...> args_tuple(std::forward<Args>(args)...);
   executor([
     executor, promise{std::move(promise)}, f{std::move(f)},
     args_tuple{std::move(args_tuple)}
@@ -133,6 +133,6 @@ auto Run(E executor, F f, Args... args) {
   });
   return std::move(package.second);
 }
-} // namespace boostcoro2
-} // namespace stlabextras
-#endif // STLAB_EXTRAS_BOOSTCORO2_HPP
+} // namespace boost_coro2
+} // namespace stlab_extras
+#endif // STLAB_EXTRAS_BOOST_CORO2_HPP
