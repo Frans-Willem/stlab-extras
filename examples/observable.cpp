@@ -14,23 +14,24 @@ int main() {
         return n;
       });
   auto obsplus =
-      obs.second.subscribe(stlab_extras::asio_executor(io_service), [](int n) {
+      obs.second.map(stlab_extras::asio_executor(io_service), [](int n) {
         std::cout << "obsplus called: " << n << std::endl;
         return n + 5;
       });
   auto obspow =
-      obsplus.subscribe(stlab_extras::asio_executor(io_service), [](int n) {
+      obsplus.map(stlab_extras::asio_executor(io_service), [](int n) {
         std::cout << "obspow called: " << n << std::endl;
         return n * n;
       });
   auto obsend =
-      obspow.subscribe(stlab_extras::asio_executor(io_service), [](int n) {
+      obspow.map(stlab_extras::asio_executor(io_service), [](int n) {
         std::cout << "obsend called: " << n << std::endl;
         return n;
       });
 
   std::cout << "Calling observable function!" << std::endl;
   obs.first(123);
+  obs.first(456);
   std::cout << "Running IO loop" << std::endl;
   io_service.run();
   return 0;

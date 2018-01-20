@@ -412,7 +412,7 @@ public:
       : base_(std::move(base)) {}
 
   template <typename E, typename F>
-  observable<typename std::result_of<F(T)>::type> subscribe(E &&e, F &&f) {
+  observable<typename std::result_of<F(T)>::type> map(E &&e, F &&f) {
     typedef typename std::result_of<F(T)>::type ReturnType;
     if (!base_) {
       return observable<ReturnType>();
