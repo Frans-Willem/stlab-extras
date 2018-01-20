@@ -18,16 +18,17 @@ int main() {
         std::cout << "obsplus called: " << n << std::endl;
         return n + 5;
       });
-  auto obspow =
-      obsplus.map(stlab_extras::asio_executor(io_service), [](int n) {
-        std::cout << "obspow called: " << n << std::endl;
-        return n * n;
-      });
+  auto obspow = obsplus.map(stlab_extras::asio_executor(io_service), [](int n) {
+    std::cout << "obspow called: " << n << std::endl;
+    return n * n;
+  });
   auto obsend =
-      obspow.map(stlab_extras::asio_executor(io_service), [](int n) {
+      obspow.map(stlab_extras::asio_executor(io_service), [](int n) -> void {
         std::cout << "obsend called: " << n << std::endl;
-        return n;
       });
+  auto obsvoid =
+      obsend.map(stlab_extras::asio_executor(io_service),
+                 []() -> void { std::cout << "obsvoid called!" << std::endl; });
 
   std::cout << "Calling observable function!" << std::endl;
   obs.first(123);

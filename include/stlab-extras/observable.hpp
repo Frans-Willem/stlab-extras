@@ -11,10 +11,39 @@
 namespace stlab_extras {
 template <typename T> class observable;
 namespace detail {
-template <typename Sig> struct observable_signature_helper;
-template <typename... T> class subscriber {
+template <typename T> struct void_helper {
+  template <typename F> struct apply_to {
+    typedef typename std::result_of<F(T)>::type return_t;
+  };
+  template <typename O> using transform_t = O(T);
+  template <typename O, typename F, typename... Args>
+  static inline void weak_call_with_result(std::weak_ptr<O> weak_object,
+                                           void (O::*call)(T), F &&f,
+                                           Args &&... args) {
+    auto r = std::forward<F>(f)(std::forward<Args>(args)...);
+    if (auto obj = weak_object.lock()) {
+      (obj.get()->*call)(r);
+    }
+  }
+};
+template <> struct void_helper<void> {
+  template <typename F> struct apply_to {
+    typedef typename std::result_of<F()>::type return_t;
+  };
+  template <typename O> using transform_t = O();
+  template <typename O, typename F, typename... Args>
+  static inline void weak_call_with_result(std::weak_ptr<O> weak_object,
+                                           void (O::*call)(), F &&f,
+                                           Args &&... args) {
+    std::forward<F>(f)(std::forward<Args>(args)...);
+    if (auto obj = weak_object.lock()) {
+      (obj.get()->*call)();
+    }
+  }
+};
+template <typename T> class subscriber {
 public:
-  virtual void on_value(T... value) = 0;
+  virtual void on_value(T value) = 0;
   virtual void on_end(std::exception_ptr) = 0;
 };
 
@@ -24,18 +53,19 @@ public:
   virtual void on_end(std::exception_ptr) = 0;
 };
 
-template <typename... T> struct value_cache {
-  boost::optional<std::tuple<T...>> storage;
+template <typename T> struct value_cache {
+  boost::optional<T> storage;
 
   value_cache() : storage(boost::none) {}
 
-  inline void set(T... args) { storage = std::make_tuple(args...); }
+  inline void set(T value) { storage = std::move(value); }
 
   inline void reset() { storage = boost::none; }
 
-  inline void call_subscriber(std::shared_ptr<subscriber<T...>> &sub) {
-    std::cout << "Attempting to call with storage with multiple types :("
-              << std::endl;
+  inline void call_subscriber(std::shared_ptr<subscriber<T>> &sub) {
+    if (storage) {
+      sub->on_value(*storage);
+    }
   }
 };
 
@@ -53,31 +83,15 @@ template <> struct value_cache<void> {
   }
 };
 
-template <typename T> struct value_cache<T> {
-  boost::optional<T> storage;
-
-  value_cache() : storage(boost::none) {}
-
-  inline void set(T value) { storage = std::move(value); }
-
-  inline void reset() { storage = boost::none; }
-
-  inline void call_subscriber(std::shared_ptr<subscriber<T>> &sub) {
-    if (storage) {
-      sub->on_value(*storage);
-    }
-  }
-};
-
 class subscription {};
-template <typename... T>
+template <typename T>
 class shared_observable
-    : public std::enable_shared_from_this<shared_observable<T...>> {
+    : public std::enable_shared_from_this<shared_observable<T>> {
 public:
   // Executor where everything will be scheduled
   stlab::executor_t executor_;
   // Last value received (or boost::none, if none have been received yet)
-  value_cache<T...> last_value_;
+  value_cache<T> last_value_;
   boost::optional<std::exception_ptr> end_state_;
   /** Four states:
    * Open (end_state_ = boost::none)
@@ -94,11 +108,11 @@ public:
 
   class observable_subscription : public subscription {
   public:
-    std::shared_ptr<subscriber<T...>> subscriber_;
-    std::shared_ptr<shared_observable<T...>> owner_;
+    std::shared_ptr<subscriber<T>> subscriber_;
+    std::shared_ptr<shared_observable<T>> owner_;
     boost::optional<typename subscription_list_type::iterator> me_;
 
-    observable_subscription(std::shared_ptr<subscriber<T...>> subscriber)
+    observable_subscription(std::shared_ptr<subscriber<T>> subscriber)
         : subscriber_(std::move(subscriber)), owner_(nullptr),
           me_(boost::none) {}
 
@@ -145,7 +159,7 @@ public:
     }
     for (auto &sub : shared_subscriptions) {
       // Automatically resets sub->subscriber_, while giving us a reference.
-      std::shared_ptr<subscriber<T...>> subscriber(std::move(sub->subscriber_));
+      std::shared_ptr<subscriber<T>> subscriber(std::move(sub->subscriber_));
       if (subscriber) {
         try {
           subscriber->on_end(exc);
@@ -192,7 +206,7 @@ public:
   }
   ~shared_observable() { std::cout << "~shared_observable()" << std::endl; }
 
-  std::shared_ptr<subscription> subscribe(std::shared_ptr<subscriber<T...>> s,
+  std::shared_ptr<subscription> subscribe(std::shared_ptr<subscriber<T>> s,
                                           bool repeat_last_value) {
     auto sub = std::make_shared<observable_subscription>(std::move(s));
     executor_([ _this(this->shared_from_this()), sub, repeat_last_value ]() {
@@ -204,7 +218,7 @@ public:
       }
       if (_this->end_state_) {
         // Automatically resets subscriber_, but keeps a copy.
-        std::shared_ptr<subscriber<T...>> s(std::move(sub->subscriber_));
+        std::shared_ptr<subscriber<T>> s(std::move(sub->subscriber_));
         // (No need to remove from list, touch owner_ or me_, as these will not
         // have been set yet)
         if (s) {
@@ -223,104 +237,9 @@ public:
   }
 
   template <typename T2> friend class stlab_extras::observable;
-  template <typename Sig>
-  friend struct stlab_extras::detail::observable_signature_helper;
 };
 
-/*
-template <typename T, typename... Args> class transforming_observable;
-template <typename R> struct transform_helper {
-  template <typename... Args>
-  static inline void publish_transformed(
-      std::shared_ptr<transforming_observable<R, Args...>> &_this,
-      Args... args) {
-    _this->publish(_this->f_(std::move(args)...));
-  }
-};
-template <> struct transform_helper<void> {
-  template <typename... Args>
-  static inline void publish_transformed(
-      std::shared_ptr<transforming_observable<void, Args...>> &_this,
-      Args... args) {
-    _this->f_(std::move(args)...);
-    _this->publish();
-  }
-};
-
-template <typename T, typename... Args>
-class transforming_observable : public shared_observable<T> {
-private:
-  std::function<T(Args...)> f_;
-  std::shared_ptr<void> subscription_reference_; // Possibly keep a reference to
-                                                 // the subscription, to keep
-                                                 // the chain alive.
-  friend class transform_helper<T>;
-
-  class transforming_subscriber : public subscriber<Args...> {
-  private:
-    std::weak_ptr<transforming_observable<T, Args...>> owner_;
-
-  public:
-    transforming_subscriber(
-        std::weak_ptr<transforming_observable<T, Args...>> owner)
-        : owner_(std::move(owner)) {}
-    ~transforming_subscriber() { on_end(nullptr); }
-    void on_value(Args... args) override {
-      // First lock to get the executor,
-      // but then pass a weak ptr to the task, as it could still be dropped.
-      if (auto owner = owner_.lock()) {
-        owner->executor_([ weak_owner(owner_), args... ]() {
-          if (auto owner = weak_owner.lock()) {
-            try {
-              transform_helper<T>::publish_transformed(owner, args...);
-            } catch (...) {
-              owner->end(std::current_exception());
-              owner->subscription_reference_.reset();
-            }
-          }
-        });
-      }
-    }
-    void on_end(std::exception_ptr exc) override {
-      if (auto owner = owner_.lock()) {
-        owner->executor_([ weak_owner(owner_), exc ]() {
-          if (auto owner = weak_owner.lock()) {
-            owner->end(exc);
-            owner->subscription_reference_.reset();
-          }
-        });
-      }
-    }
-  };
-
-public:
-  template <typename E, typename F>
-  transforming_observable(E &&e, F &&f)
-      : shared_observable<T>(std::forward<E>(e)), f_(std::forward<F>(f)) {}
-
-  template <typename E, typename F>
-  static std::pair<std::shared_ptr<subscriber<Args...>>,
-                   std::shared_ptr<shared_observable<T>>>
-  create_empty(E &&e, F &&f) {
-    auto obs = std::make_shared<transforming_observable>(std::forward<E>(e),
-                                                         std::forward<F>(f));
-    auto sub = std::make_shared<transforming_subscriber>(obs);
-    return std::make_pair(sub, obs);
-  }
-
-  template <typename E, typename F>
-  static std::shared_ptr<shared_observable<T>>
-  create(E &&e, std::shared_ptr<shared_observable<Args...>> source,
-         bool repeat_last_value, F &&f) {
-    auto obs = std::make_shared<transforming_observable>(std::forward<E>(e),
-                                                         std::forward<F>(f));
-    obs->subscription_reference_ = source->subscribe(
-        std::make_shared<transforming_subscriber>(obs), repeat_last_value);
-    return obs;
-  }
-};
-*/
-
+template <typename Sig> struct observable_signature_helper;
 template <typename R, typename... Args>
 struct observable_signature_helper<R(Args...)> {
   typedef std::function<void(Args...)> PublishType;
@@ -357,6 +276,7 @@ struct observable_signature_helper<R(Args...)> {
     };
   }
 };
+
 template <typename I, typename O>
 class transforming_subscriber
     : public subscriber<I>,
@@ -375,10 +295,51 @@ public:
           return;
         }
         try {
-          auto r = _this->transform_(std::move(input));
+          void_helper<O>::weak_call_with_result(
+              _this->weak_output_, &shared_observable<O>::publish,
+              _this->transform_, std::move(input));
+        } catch (...) {
           if (auto output = _this->weak_output_.lock()) {
-            output->publish(r);
+            output->end(std::current_exception());
           }
+        }
+      });
+    }
+  }
+  void on_end(std::exception_ptr ex) override {
+    if (auto output = weak_output_.lock()) {
+      auto weak_output = weak_output_;
+      output->executor_([ex, weak_output]() {
+        if (auto output = weak_output.lock()) {
+          output->end(ex);
+        }
+      });
+    }
+  }
+
+  template <typename F>
+  transforming_subscriber(std::weak_ptr<shared_observable<O>> output, F &&f)
+      : transform_(f), weak_output_(std::move(output)) {}
+};
+template <typename O>
+class transforming_subscriber<void, O>
+    : public subscriber<void>,
+      public std::enable_shared_from_this<transforming_subscriber<void, O>> {
+private:
+  std::function<O()> transform_;
+  std::weak_ptr<shared_observable<O>> weak_output_;
+
+public:
+  void on_value() override {
+    if (auto output = weak_output_.lock()) {
+      output->executor_([_this(this->shared_from_this())]() mutable {
+        if (_this->weak_output_.expired()) {
+          return;
+        }
+        try {
+          void_helper<O>::weak_call_with_result(_this->weak_output_,
+                                                &shared_observable<O>::publish,
+                                                _this->transform_);
         } catch (...) {
           if (auto output = _this->weak_output_.lock()) {
             output->end(std::current_exception());
@@ -412,19 +373,21 @@ public:
       : base_(std::move(base)) {}
 
   template <typename E, typename F>
-  observable<typename std::result_of<F(T)>::type> map(E &&e, F &&f) {
-    typedef typename std::result_of<F(T)>::type ReturnType;
+  observable<typename detail::void_helper<T>::template apply_to<F>::return_t>
+  map(E &&e, F &&f) {
+    typedef typename detail::void_helper<T>::template apply_to<F>::return_t
+        return_t;
     if (!base_) {
-      return observable<ReturnType>();
+      return observable<return_t>();
     }
-    auto next = std::make_shared<detail::shared_observable<ReturnType>>(
+    auto next = std::make_shared<detail::shared_observable<return_t>>(
         std::forward<E>(e));
     auto transform =
-        std::make_shared<detail::transforming_subscriber<T, ReturnType>>(
+        std::make_shared<detail::transforming_subscriber<T, return_t>>(
             next, std::forward<F>(f));
     auto sub = base_->subscribe(transform, true);
     next->dependencies_.emplace_back(std::move(sub));
-    return observable<ReturnType>(next);
+    return observable<return_t>(next);
   }
 
 private:
