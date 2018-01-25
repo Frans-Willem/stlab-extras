@@ -43,12 +43,14 @@ template <> struct void_helper<void> {
 };
 template <typename T> class subscriber {
 public:
+  virtual ~subscriber() = default;
   virtual void on_value(T value) = 0;
   virtual void on_end(std::exception_ptr) = 0;
 };
 
 template <> class subscriber<void> {
 public:
+  virtual ~subscriber() = default;
   virtual void on_value() = 0;
   virtual void on_end(std::exception_ptr) = 0;
 };
@@ -101,7 +103,7 @@ public:
   // What dependencies to keep alive.
   std::list<std::shared_ptr<void>> dependencies_;
 
-  struct observable_subscription;
+  class observable_subscription;
   typedef std::list<std::weak_ptr<observable_subscription>>
       subscription_list_type;
   subscription_list_type subscriptions_;
@@ -286,6 +288,7 @@ private:
   std::weak_ptr<shared_observable<O>> weak_output_;
 
 public:
+  ~transforming_subscriber() override = default;
   void on_value(I input) override {
     if (auto output = weak_output_.lock()) {
       output->executor_([
@@ -330,6 +333,7 @@ private:
   std::weak_ptr<shared_observable<O>> weak_output_;
 
 public:
+  ~transforming_subscriber() override = default;
   void on_value() override {
     if (auto output = weak_output_.lock()) {
       output->executor_([_this(this->shared_from_this())]() mutable {
