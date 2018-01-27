@@ -21,8 +21,9 @@ target_include_directories(stlab INTERFACE ${STLAB_INCLUDE_DIRS})
 
 add_library(stlab-extras INTERFACE)
 target_include_directories(stlab-extras INTERFACE ${CMAKE_SOURCE_DIR}/include/)
+target_include_directories(stlab-extras INTERFACE ${Boost_INCLUDE_DIRS})
 target_link_libraries(stlab-extras INTERFACE stlab)
-target_link_libraries(stlab-extras INTERFACE Boost::system)
+target_link_libraries(stlab-extras INTERFACE ${Boost_LIBRARIES})
 target_link_libraries(stlab-extras INTERFACE Threads::Threads)
 
 add_subdirectory(examples)
